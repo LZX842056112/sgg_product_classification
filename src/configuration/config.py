@@ -17,7 +17,8 @@ LOG_DIR = ROOT_DIR / 'logs'
 RAW_TRAIN_DATA = 'train.txt'
 RAW_VALID_DATA = 'valid.txt'
 RAW_TEST_DATA = 'test.txt'
-BERT_MODEL_NAME = 'google-bert/bert-base-chinese'  # BERT模型名称
+BERT_MODEL_NAME = r"D:\cache\huggingface\hub\models--bert-base-chinese\snapshots\8f23c25b06e129b6c986331a13d8d025a92cf0ea"
+# BERT_MODEL_NAME = 'google-bert/bert-base-chinese'  # BERT模型名称
 
 LABELS_FILE = 'labels.txt'
 
