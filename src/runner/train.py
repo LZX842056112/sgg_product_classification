@@ -21,12 +21,14 @@ class TrainConfig:
     save_steps: int = 10
     output_dir: str = './models'
     log_dir: str = './logs'
+    early_stop_metric: str = 'loss'  # 早停指标（loss, acc, f1）
+    early_stop_patience: int = 2  # 容忍度
 
 
 # 训练器类
 class Trainer:
     # 初始化
-    def __init__(self, model, train_dataset, collate_fn, device, train_config=None):
+    def __init__(self, model, train_dataset, valid_dataset, collate_fn, compute_metrics, device, train_config=None):
         # 训练参数配置
         self.train_config = train_config
         # 模型和设备
@@ -34,7 +36,10 @@ class Trainer:
         self.device = device
         # 数据集和数据整理函数
         self.train_dataset = train_dataset
+        self.valid_dataset = valid_dataset
         self.collate_fn = collate_fn
+        # 评估函数
+        self.compute_metrics = compute_metrics
         # 优化器
         self.optimizer = Adam(model.parameters(), lr=self.train_config.learning_rate)
 
@@ -42,6 +47,10 @@ class Trainer:
         self.step = 1
         # Tensorboard写入器
         self.writer = SummaryWriter(log_dir=str(Path(self.train_config.log_dir) / time.strftime("%Y-%m-%d-%H-%M-%S")))
+        # 全局最佳评估得分
+        self.early_stop_best_score = -float("inf")
+        # 容忍度计数器
+        self.early_stop_counter = 0
 
     # 定义内部方法：获取数据加载器
     def _get_dataloader(self, dataset):
@@ -56,6 +65,7 @@ class Trainer:
 
         return dataloader
 
+    # 核心方法
     def train(self):
         self.model.train()
         # 获取训练集加载器
@@ -74,13 +84,23 @@ class Trainer:
                     tqdm.write(f'[Epoch:{epoch + 1} | Step:{self.step}]  Loss: {this_loss}')
                     self.writer.add_scalar('loss', this_loss, self.step)
 
-                    # 判断是否保存模型
-                    if this_loss < self.min_loss:
-                        self.min_loss = this_loss
-                        tqdm.write("保存模型...")
-                        self.model.save_pretrained(self.train_config.output_dir)
+                    # 验证，得到验证指标
+                    metrics = self.evaluate()
+                    metrics_str = '|'.join([f'{k}:{v:.4f}' for k, v in metrics.items()])
+                    tqdm.write(f'[Evaluate: {metrics_str}]')
 
-                    self.step += 1  # 迭代次数加1
+                    # 早停判断处理
+                    if self._should_stop(metrics):
+                        tqdm.write('早停')
+                        return
+
+                    # # 判断是否保存模型
+                    # if this_loss < self.min_loss:
+                    #     self.min_loss = this_loss
+                    #     tqdm.write("保存模型...")
+                    #     self.model.save_pretrained( self.train_config.output_dir )
+
+                self.step += 1  # 迭代次数加1
 
     # 一步训练（一次迭代）
     def _train_one_step(self, inputs):
@@ -94,7 +114,56 @@ class Trainer:
         self.optimizer.zero_grad()
         return loss.item()
 
+    # 核心验证方法，返回一个字典，记录不同的评价指标：{loss:0.35, acc:0.89, f1:0.76}
+    def evaluate(self) -> dict:
+        # 获取验证集数据加载器
+        dataloader = self._get_dataloader(self.valid_dataset)
+        self.model.eval()
 
+        total_loss = 0.0
+        all_labels = []  # 所有数据真实标签
+        all_preds = []  # 所有数据预测标签
+
+        for inputs in tqdm(dataloader, desc=f'[Evaluate]'):
+            inputs = {k: v.to(self.device) for k, v in inputs.items()}
+            # 前向传播
+            outputs = self.model(**inputs)
+            # 获取损失
+            loss = outputs.loss
+            total_loss += loss.item()
+            # 预测分类结果
+            logits = outputs.logits
+            preds = torch.argmax(logits, dim=-1)
+            all_preds.extend(preds.tolist())
+            # 获取标签合并到列表
+            labels = inputs['labels']
+            all_labels.extend(labels.tolist())
+        # 遍历完验证集，计算平均损失和其它指标
+        loss = total_loss / len(dataloader)
+        metrics = self.compute_metrics(all_preds, all_labels)  # 返回一组指标的字典
+        return {'loss': loss, **metrics}
+
+    def _should_stop(self, metrics):
+        # 提取配置项中定义的指标值
+        metric = metrics[self.train_config.early_stop_metric]
+        # 转换评分
+        score = -metric if self.train_config.early_stop_metric == 'loss' else metric
+        # 判断如果超过最佳得分，就保存
+        if score > self.early_stop_best_score:
+            self.early_stop_best_score = score
+            self.early_stop_counter = 0  # 计数清零
+            model.save_pretrained(str(Path(self.train_config.output_dir) / "best"))
+            return False
+        else:
+            self.early_stop_counter += 1  # 计数加1
+            # 如果达到上限，就早停
+            if self.early_stop_counter >= self.train_config.early_stop_patience:
+                return True
+            else:
+                return False
+
+
+# 训练调用流程
 if __name__ == '__main__':
     # 1. 定义设备
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -119,12 +188,22 @@ if __name__ == '__main__':
     # print(model.config.id2label)
     # model.save_pretrained(MODEL_DIR)
 
-    train_dataset = get_dataset('train')
+    # 5. 数据集和整理函数
+    train_dataset = get_dataset('train').select(range(1000))
+    valid_dataset = get_dataset('valid').select(range(100))
     collate_fn = DataCollatorWithPadding(
         tokenizer=tokenizer,
         padding=True,
         return_tensors='pt'
     )
+
+
+    # 6. 评估函数：根据实际需求定义，acc 和 f1
+    def compute_metrics(preds, labels) -> dict:
+        acc = accuracy_score(labels, preds)
+        f1 = f1_score(labels, preds, average='weighted')
+        return {'acc': acc, 'f1': f1}
+
 
     # 7. 定义训练配置
     train_config = TrainConfig(batch_size=16, output_dir=MODEL_DIR, log_dir=LOG_DIR)
@@ -133,7 +212,9 @@ if __name__ == '__main__':
     trainer = Trainer(
         model=model,
         train_dataset=train_dataset,
+        valid_dataset=valid_dataset,
         collate_fn=collate_fn,
+        compute_metrics=compute_metrics,
         device=device,
         train_config=train_config
     )
