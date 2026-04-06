@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 
 from configuration.config import *
 
+
 # 获取数据集
 def get_dataset(ds_type='train'):
     # 加载数据集
@@ -12,11 +13,10 @@ def get_dataset(ds_type='train'):
     dataset = load_from_disk(path)
     return dataset
 
+
 # 获取数据加载器
 def get_dataloader(tokenizer, ds_type='train'):
-    # 加载数据集
-    path = str( PROCESSED_DATA_DIR / ds_type )
-    dataset = load_from_disk(path)
+    dataset = get_dataset(ds_type)
 
     # 设置格式为 tensor
     dataset.set_format(type='torch')
@@ -29,6 +29,7 @@ def get_dataloader(tokenizer, ds_type='train'):
     )
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
     return dataloader
+
 
 if __name__ == '__main__':
     tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_NAME)
