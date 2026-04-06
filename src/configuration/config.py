@@ -7,7 +7,7 @@ ROOT_DIR = Path(__file__).parent.parent.parent
 RAW_DATA_DIR = ROOT_DIR / 'data' / 'raw'
 PROCESSED_DATA_DIR = ROOT_DIR / 'data' / 'processed'
 # 模型目录
-MODEL_DIR = ROOT_DIR / 'models'
+MODEL_DIR = ROOT_DIR / 'checkpoint'
 
 # 日志目录
 LOG_DIR = ROOT_DIR / 'logs'
